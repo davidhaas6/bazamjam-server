@@ -1,0 +1,7 @@
+__pycache__/
+venv/
+
+*.mid*
+*.wav
+
+midi-mouth/
