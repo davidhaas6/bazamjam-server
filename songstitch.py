@@ -1,4 +1,5 @@
 #%%
+import functools
 from effects import Sound
 import numpy as np
 import pandas as pd
@@ -14,7 +15,7 @@ from itertools import accumulate
 # 	synthesize rest of instruments, add on tops
 
 
-class SongSticher:
+class SongStitcher:
     def __init__(
         self,
         midi,
@@ -26,9 +27,7 @@ class SongSticher:
     # Read MIDI and extract instrument
     def extract_song_data(midi_data, midi_instrument: int, key_shift: float):
         # instrument to map the sounds to
-        mapping_instrument = midi_data.instruments[
-            midi_instrument
-        ]  
+        mapping_instrument = midi_data.instruments[midi_instrument]
         mapping_instrument.remove_invalid_notes()
 
         # Form an array of the song parameters in question
@@ -54,40 +53,35 @@ class SongSticher:
         return song_df
 
     # returns a list of synthesized instruments
-    def get_synths(self, exclude=[],  fs=None) -> list:
+    def get_synths(self, exclude=[], fs=None) -> list:
         # Parse inputs
         if not self.fs or fs:
             raise Exception("must specify sampling rate")
         fs = fs if fs else self.fs
 
         # get all our tracks
-        tracks = [
-            instr.synthesize(fs)
-            for i, instr in enumerate(self.midi.instruments)
-            if i not in exclude
-        ]
-        tracks = list(filter(lambda t: t.any(), tracks))
+        joined_track = np.zeros(0)
+        for i, instr in enumerate(self.midi.instruments):
+            if i not in exclude:
+                print(i)
+                joined_track = SongStitcher.join_tracks([joined_track, instr.synthesize(fs)])
 
         # process
-        for i, _ in enumerate(tracks):
-            tracks[i] /= np.max(tracks[i]) # normalize sound
-            tracks[i] *= 50/100 # volumes
-        
-        return tracks
+        if len(joined_track) > 0:
+            joined_track /= np.max(joined_track)  # normalize sound
+            joined_track *= 50 / 100  # volumes
 
+        return joined_track
 
     # joins a list of tracks into a single track (sums them)
-    def join_tracks(tracks: list) -> list:
+    def join_tracks(tracks: list) -> np.ndarray:
         # pad them to all the same length
         max_length = max(len(row) for row in tracks)
         pad_equal = lambda arr: np.pad(arr, (0, max_length - len(arr)))
         tracks = map(pad_equal, tracks)
 
         # join them
-        song = np.array(list(tracks)).sum(axis=0)
-
-        return song
-
+        return np.array(list(tracks)).sum(axis=0)
 
     # TODO: What if you did like a sliding pitch shift so each sound is the same length
     # 		instead of having short and fast versions of the sosund. you could overlay multiple
@@ -96,7 +90,7 @@ class SongSticher:
     # 		you just have to chop the sound in the right place and stitch it with a different freq sound.
     # 		prolly a clever way to deal with rests too. like continuing from where you left off
     def map_sound(self, sound, midi_instrument, key_shift=0):
-        song_df = SongSticher.extract_song_data(self.midi, midi_instrument, key_shift)
+        song_df = SongStitcher.extract_song_data(self.midi, midi_instrument, key_shift)
         fs = sound.fs if not self.fs else self.fs
 
         # create empty samples array for the output song

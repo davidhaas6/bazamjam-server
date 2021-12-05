@@ -2,7 +2,6 @@ from code import interact
 import numpy as np
 import librosa 
 import math  # log
-import sounddevice as sd  # playing
 
 
 class Sound:
@@ -63,8 +62,8 @@ class Sound:
     def load(self, path):
         self.y, self.fs = librosa.load(path)
 
-    def play(self,blocking=False):
-        sd.play(self.y, self.fs, blocking=blocking)
+    # def play(self,blocking=False):
+    #     sd.play(self.y, self.fs, blocking=blocking)
 
     @staticmethod
     def steps_between_freqs(f1,f2):
