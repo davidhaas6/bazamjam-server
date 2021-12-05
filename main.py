@@ -7,6 +7,8 @@ from fastapi import FastAPI, UploadFile, File
 import numpy as np
 from pretty_midi import PrettyMIDI
 import soundfile as sf
+from starlette.responses import RedirectResponse, FileResponse
+import os
 from effects import Sound
 
 from songstitch import SongSticher
@@ -14,71 +16,124 @@ import glob
 import shortuuid
 
 # Logic
-
 def get_midi_name(midi_path):
-    return midi_path.split('/')[-1].split('.')[0]
+    return midi_path.split("/")[-1].split(".")[0]
 
 
 def valid_audio(file: UploadFile):
-    return 'audio' in file.content_type
+    return "audio" in file.content_type
+
 
 # globals
 
 
 # song id = midi song name
-_midis = {get_midi_name(f):PrettyMIDI(f) for f in glob.glob('midi/*.mid')}
+_midis = {get_midi_name(f): PrettyMIDI(f) for f in glob.glob("midi/*.mid")}
 app = FastAPI()
 
 # routes
 
+
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return RedirectResponse("/docs")
 
-@app.get('/get_songs')
+
+@app.get("/get_songs")
 def get_songs():
-    return {i:k for i,k in enumerate(_midis.keys())}
+    return {i: k for i, k in enumerate(_midis.keys())}
 
-@app.get('/get_instruments')
+
+@app.get("/get_instruments")
 def get_instruments(song_id):
-    return {i:instrument.name for i,instrument in enumerate(_midis[song_id].instruments)}
+    if song_id not in _midis.keys():
+        return {"error": "song not found"}
+    return {
+        i: instrument.name for i, instrument in enumerate(_midis[song_id].instruments)
+    }
 
-@app.post('/create_song')
-async def create_song(song_id: str, instrument_num: int, key_shift: int, user_sample: UploadFile = File(...)):
-    try:
-        if song_id in _midis:
-            midi = _midis[song_id]
+
+@app.post("/create_song")
+async def create_song(
+    song_id: str,
+    instrument_num: int,
+    key_shift: int,
+    user_sample: UploadFile = File(...),
+    all_tracks: bool = False,
+    map_drums: bool = False,
+):
+    if song_id in _midis:
+        midi = _midis[song_id]
+    else:
+        raise Exception("Invalid song id")
+
+    if valid_audio(user_sample):
+        sound = Sound(path=user_sample.file, trim=False)
+    else:
+        raise Exception("Invalid audio file")
+
+    if not all_tracks and (
+        instrument_num < 0 or instrument_num >= len(midi.instruments)
+    ):
+        raise Exception("Invalid instrument number")
+
+    if key_shift not in range(-84, 84):
+        key_shift = 0
+
+    # choose which instruments to map the sound to
+    all_instrs = list(range(len(midi.instruments)))
+    instruments_to_map = all_instrs if all_tracks else [instrument_num]
+    unmapped_instruments = set(all_instrs) - set(instruments_to_map)
+
+    # if not map_drums:
+    #     print("no drums")
+    #     instruments_to_map = filter(lambda idx: midi.instruments[idx].is_drum==False, instruments_to_map)
+    #     print(len(all_instrs) - len(list(instruments_to_map)), "drums removed")
+
+    # map the sound to those instruments
+    stitcher = SongSticher(midi, sound.fs)
+    mapped_tracks = []
+    for instrument in instruments_to_map:
+        mapped_instr_audio = stitcher.map_sound(sound, instrument, key_shift)
+        if mapped_instr_audio is None:
+            raise Exception("Song not created")
         else:
-            raise Exception('Invalid song id')
-        
-        if valid_audio(user_sample):
-            sound = Sound(path=user_sample.file, trim=False)        
-        else:
-            raise Exception('Invalid audio file')
-        
-        if instrument_num < 0 or instrument_num >= len(midi.instruments):
-            raise Exception('Invalid instrument number')
-        
-        if key_shift not in range(-84,84):
-            key_shift = 0
+            mapped_tracks += [mapped_instr_audio]
 
-        stitcher = SongSticher(midi,sound.fs)
-        song = stitcher.map_sound(sound, instrument_num, key_shift)
-        if song is None:
-            raise Exception('Song not created')
+    unmapped_tracks = stitcher.get_synths(exclude=instruments_to_map)
+    synth_song = SongSticher.join_tracks(mapped_tracks + unmapped_tracks)
 
-        name = f'{song_id}_{instrument_num}_{key_shift}_{shortuuid.random(8)}.wav'
-        # sf.write(f'out/{name}', song, sound.fs, subtype='PCM_24')
-        
-        tracks = stitcher.get_synths([instrument_num])
-        synth_song = SongSticher.join_tracks(tracks + [song])
+    # store the end result song
+    name = f"{song_id}_{instrument_num}_{key_shift}_{shortuuid.random(8)}.wav"
+    filepath = f"out/synth_{name}"
+    sf.write(filepath, synth_song, sound.fs, subtype="PCM_24")
 
-        sf.write(f'out/synth_{name}', synth_song, sound.fs, subtype='PCM_24')
-        print("wrote other song too")
-    except Exception as e:
-        print(e)
-        return {'error': str(e)}
+    print("wrote other song too")
 
-    return {'song': name}
+    return {"song": filepath}
 
 
+# donwloads a users outputted song. currently the song_id is the file path
+@app.get("/download_song")
+def download_song(song_id: str):
+    # validate id
+    if (
+        not song_id.startswith("out/")
+        or not os.path.isfile(song_id)
+        or not song_id.endswith(".wav")
+    ):
+        return {"error": "invalid song id"}
+
+    # return song
+    song_path = song_id
+    return FileResponse(song_path, media_type="audio/wav")
+
+
+def download(file_path):
+    """
+    Download file for given path.
+    """
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+        # return FileResponse(path=file_path)
+    return None
