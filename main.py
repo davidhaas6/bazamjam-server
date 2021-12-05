@@ -4,14 +4,17 @@
 # the songs are midi files, the user's input is an audio file.
 
 from fastapi import FastAPI, UploadFile, File
-import numpy as np
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import RedirectResponse, FileResponse
+
 from pretty_midi import PrettyMIDI
 import soundfile as sf
-from starlette.responses import RedirectResponse, FileResponse
-import os
-from effects import Sound
 
+from effects import Sound
 from songstitch import SongSticher
+
+import os
 import glob
 import shortuuid
 
@@ -28,8 +31,27 @@ def valid_audio(file: UploadFile):
 
 
 # song id = midi song name
-_midis = {get_midi_name(f): PrettyMIDI(f) for f in glob.glob("midi/*.mid")}
+_songs = {}
+_midis = {}
+for id, f in enumerate(glob.glob("midi/*.mid")):
+    id = str(id)
+    _songs[id] = get_midi_name(f)
+    _midis[id] = PrettyMIDI(f)
+    
+
+# app configuration
 app = FastAPI()
+
+# TODO: Make this more restrictive
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount("/out", StaticFiles(directory="out"), name="out")
 
 # routes
 
@@ -41,15 +63,17 @@ async def root():
 
 @app.get("/get_songs")
 def get_songs():
-    return {i: k for i, k in enumerate(_midis.keys())}
+    return _songs
 
 
 @app.get("/get_instruments")
 def get_instruments(song_id):
     if song_id not in _midis.keys():
+        print(_midis.keys())
         return {"error": "song not found"}
+    
     return {
-        i: instrument.name for i, instrument in enumerate(_midis[song_id].instruments)
+        num: instrument.name for num, instrument in enumerate(_midis[song_id].instruments)
     }
 
 
@@ -62,7 +86,8 @@ async def create_song(
     all_tracks: bool = False,
     map_drums: bool = False,
 ):
-    if song_id in _midis:
+    print("start")
+    if song_id in _songs:
         midi = _midis[song_id]
     else:
         raise Exception("Invalid song id")
